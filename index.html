@@ -1,0 +1,1019 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Troop 4 Quartermaster</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Lato:wght@300;400;700&display=swap" rel="stylesheet">
+
+<!-- ══════════════════════════════════════════════
+     FIREBASE CONFIG — Replace these values with
+     your own from the Firebase Console.
+     See SETUP_GUIDE.md for step-by-step instructions.
+     ══════════════════════════════════════════════ -->
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getFirestore, collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+  // 🔧 REPLACE THIS BLOCK with your Firebase project config:
+  const firebaseConfig = {
+    apiKey: "AIzaSyA58QKt1IYb3xUwm5x0Zopar6t1VSnhUvg",
+    authDomain: "troop-4-quartermaster.firebaseapp.com",
+    projectId: "troop-4-quartermaster",
+    storageBucket: "troop-4-quartermaster.firebasestorage.app",
+    messagingSenderId: "378010499575",
+    appId: "1:378010499575:web:4e016d11d429243bde56f2"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+
+  // ── COLLECTIONS ──
+  const itemsCol  = collection(db, 'items');
+  const logsCol   = collection(db, 'logs');
+
+  // ── STATE ──
+  window._db = db;
+  window._col = { items: itemsCol, logs: logsCol };
+  window._fb = { collection, doc, getDocs, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc };
+  window._state = { items: [], logs: [], adminUnlocked: false };
+
+  // ── REAL-TIME LISTENERS ──
+  onSnapshot(itemsCol, snap => {
+    window._state.items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    window._state.items.sort((a,b) => (a.name||'').localeCompare(b.name||''));
+    safeRender();
+  });
+
+  onSnapshot(logsCol, snap => {
+    window._state.logs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    window._state.logs.sort((a,b) => new Date(b.checkedOut) - new Date(a.checkedOut));
+    safeRender();
+  });
+
+  function safeRender() {
+    const active = document.querySelector('.section.active');
+    if (!active) return;
+    const id = active.id.replace('section-','');
+    if (id === 'inventory') renderInventory();
+    if (id === 'checkout') { renderCheckoutSelect(); renderActiveCheckouts(); }
+    if (id === 'log') renderLog();
+    if (id === 'admin' && window._state.adminUnlocked) { renderAdminItems(); renderAdminLogs(); }
+  }
+
+  // ── INVENTORY ──
+  window.renderInventory = function() {
+    const tbody = document.getElementById('inventory-body');
+    const items = window._state.items;
+    if (!items.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No items yet — ask the Quartermaster.</td></tr>'; return; }
+    tbody.innerHTML = items.map(item => {
+      const avail = getAvailable(item.id);
+      const pct = item.qty ? avail / item.qty : 0;
+      const badgeClass = avail === 0 ? 'badge-out' : pct <= 0.3 ? 'badge-low' : 'badge-ok';
+      const badgeText  = avail === 0 ? 'OUT' : pct <= 0.3 ? 'LOW' : 'IN STOCK';
+      return `<tr>
+        <td><strong>${esc(item.name)}</strong></td>
+        <td><span style="color:var(--silver)">${esc(item.category||'')}</span></td>
+        <td>${item.qty}</td>
+        <td><strong>${avail}</strong></td>
+        <td><span class="badge ${badgeClass}">${badgeText}</span></td>
+      </tr>`;
+    }).join('');
+  };
+
+  // ── CHECKOUT ──
+  window.renderCheckoutSelect = function() {
+    const sel = document.getElementById('co-item');
+    const items = window._state.items;
+    sel.innerHTML = items.length
+      ? items.map(i => { const a = getAvailable(i.id); return `<option value="${i.id}" ${a===0?'disabled':''}>${esc(i.name)} (${a} avail)</option>`; }).join('')
+      : '<option disabled>No items loaded yet</option>';
+  };
+
+  window.checkoutItem = async function() {
+    const name   = document.getElementById('co-name').value.trim();
+    const itemId = document.getElementById('co-item').value;
+    const qty    = parseInt(document.getElementById('co-qty').value) || 1;
+    const notes  = document.getElementById('co-notes').value.trim();
+    if (!name)   { showToast('Please enter your name.', 'error'); return; }
+    if (!itemId) { showToast('Please select an item.', 'error'); return; }
+    if (getAvailable(itemId) < qty) { showToast('Not enough quantity available.', 'error'); return; }
+    const item = window._state.items.find(i => i.id === itemId);
+    try {
+      await addDoc(logsCol, { scout: name, itemId, itemName: item?.name||'', qty, notes, status: 'out', checkedOut: new Date().toISOString(), returned: null });
+      showToast(`${qty}x ${item?.name} checked out to ${name}!`);
+      document.getElementById('co-name').value = '';
+      document.getElementById('co-qty').value = '1';
+      document.getElementById('co-notes').value = '';
+    } catch(e) { showToast('Error: ' + e.message, 'error'); }
+  };
+
+  window.returnItem = async function() {
+    const name   = document.getElementById('co-name').value.trim();
+    const itemId = document.getElementById('co-item').value;
+    if (!name) { showToast('Please enter your name.', 'error'); return; }
+    const log = window._state.logs.find(l => l.scout.toLowerCase()===name.toLowerCase() && l.itemId===itemId && l.status==='out');
+    if (!log) { showToast('No active checkout found for that name & item.', 'error'); return; }
+    try {
+      await updateDoc(doc(db, 'logs', log.id), { status: 'returned', returned: new Date().toISOString() });
+      showToast('Item returned successfully!');
+      document.getElementById('co-name').value = '';
+    } catch(e) { showToast('Error: ' + e.message, 'error'); }
+  };
+
+  window.renderActiveCheckouts = function() {
+    const tbody  = document.getElementById('active-checkouts-body');
+    const active = window._state.logs.filter(l => l.status === 'out');
+    if (!active.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty">No active checkouts.</td></tr>'; return; }
+    tbody.innerHTML = active.map(l => `<tr>
+      <td><strong>${esc(l.scout)}</strong></td>
+      <td>${esc(l.itemName)}</td>
+      <td>${l.qty}</td>
+      <td>${fmt(l.checkedOut)}</td>
+      <td style="color:var(--silver)">${esc(l.notes||'—')}</td>
+    </tr>`).join('');
+  };
+
+  // ── LOG ──
+  window.renderLog = function() {
+    const tbody = document.getElementById('log-body');
+    const logs  = window._state.logs;
+    if (!logs.length) { tbody.innerHTML = '<tr><td colspan="7" class="empty">No log entries yet.</td></tr>'; return; }
+    tbody.innerHTML = logs.map(l => `<tr>
+      <td><strong>${esc(l.scout)}</strong></td>
+      <td>${esc(l.itemName)}</td>
+      <td>${l.qty}</td>
+      <td>${fmt(l.checkedOut)}</td>
+      <td>${l.returned ? fmt(l.returned) : '—'}</td>
+      <td><span class="${l.status==='out'?'status-out':'status-in'}">${l.status==='out'?'OUT':'RETURNED'}</span></td>
+      <td style="color:var(--silver)">${esc(l.notes||'—')}</td>
+    </tr>`).join('');
+  };
+
+  // ── ADMIN ITEMS ──
+  window.renderAdminItems = function() {
+    const tbody = document.getElementById('admin-items-body');
+    const items = window._state.items;
+    if (!items.length) { tbody.innerHTML = '<tr><td colspan="4" class="empty">No items.</td></tr>'; return; }
+    tbody.innerHTML = items.map(item => `<tr id="item-row-${item.id}">
+      <td>${esc(item.name)}</td>
+      <td>${esc(item.category||'')}</td>
+      <td>${item.qty}</td>
+      <td>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="editItemRow('${item.id}')">✏️ Edit</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteItem('${item.id}')">🗑 Delete</button>
+        </div>
+      </td>
+    </tr>`).join('');
+  };
+
+  window.editItemRow = function(id) {
+    const item = window._state.items.find(i => i.id === id);
+    const row  = document.getElementById('item-row-' + id);
+    row.innerHTML = `
+      <td class="edit-cell"><input id="ei-name-${id}" value="${esc(item.name)}" /></td>
+      <td class="edit-cell"><input id="ei-cat-${id}" value="${esc(item.category||'')}" /></td>
+      <td class="edit-cell"><input id="ei-qty-${id}" type="number" min="0" value="${item.qty}" style="width:70px;" /></td>
+      <td>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-gold btn-sm" onclick="saveItemEdit('${id}')">✓ Save</button>
+          <button class="btn btn-ghost btn-sm" onclick="renderAdminItems()">✕</button>
+        </div>
+      </td>`;
+  };
+
+  window.saveItemEdit = async function(id) {
+    const name = document.getElementById('ei-name-'+id).value.trim();
+    const cat  = document.getElementById('ei-cat-'+id).value.trim();
+    const qty  = parseInt(document.getElementById('ei-qty-'+id).value) || 0;
+    if (!name) { showToast('Name required.', 'error'); return; }
+    try {
+      await updateDoc(doc(db, 'items', id), { name, category: cat, qty });
+      // Update log names if item name changed
+      const toUpdate = window._state.logs.filter(l => l.itemId === id && l.itemName !== name);
+      await Promise.all(toUpdate.map(l => updateDoc(doc(db,'logs',l.id), { itemName: name })));
+      showToast('Item updated!');
+    } catch(e) { showToast('Error: '+e.message,'error'); }
+  };
+
+  window.deleteItem = function(id) {
+    const item = window._state.items.find(i => i.id===id);
+    openConfirmModal(`Delete "${item?.name}"?`, 'This removes it from inventory. Logs are preserved.', async () => {
+      try { await deleteDoc(doc(db,'items',id)); showToast('Item deleted.','info'); closeModal(); }
+      catch(e) { showToast('Error: '+e.message,'error'); }
+    });
+  };
+
+  window.openAddItemModal = function() {
+    openModal('Add New Item', `
+      <div class="form-group" style="margin-bottom:14px;"><label>Item Name</label><input id="m-name" placeholder="e.g. Lantern" /></div>
+      <div class="form-group" style="margin-bottom:14px;"><label>Category</label><input id="m-cat" placeholder="e.g. Lighting" /></div>
+      <div class="form-group"><label>Quantity</label><input id="m-qty" type="number" min="1" value="1" /></div>
+    `, [
+      { label: 'Cancel', cls: 'btn-ghost', action: closeModal },
+      { label: 'Add Item', cls: 'btn-gold', action: async () => {
+        const name = document.getElementById('m-name').value.trim();
+        const cat  = document.getElementById('m-cat').value.trim();
+        const qty  = parseInt(document.getElementById('m-qty').value) || 1;
+        if (!name) { showToast('Name required.','error'); return; }
+        try {
+          await addDoc(itemsCol, { name, category: cat||'General', qty });
+          showToast(`"${name}" added!`); closeModal();
+        } catch(e) { showToast('Error: '+e.message,'error'); }
+      }}
+    ]);
+  };
+
+  // ── ADMIN LOGS ──
+  window.renderAdminLogs = function() {
+    const tbody = document.getElementById('admin-logs-body');
+    const logs  = window._state.logs;
+    if (!logs.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No log entries.</td></tr>'; return; }
+    tbody.innerHTML = logs.map(l => `<tr id="log-row-${l.id}">
+      <td>${esc(l.scout)}</td>
+      <td>${esc(l.itemName)}</td>
+      <td>${l.qty}</td>
+      <td style="font-size:0.8rem;">${fmt(l.checkedOut)}</td>
+      <td style="font-size:0.8rem;">${l.returned?fmt(l.returned):'—'}</td>
+      <td><span class="${l.status==='out'?'status-out':'status-in'}">${l.status==='out'?'OUT':'RETURNED'}</span></td>
+      <td style="color:var(--silver)">${esc(l.notes||'—')}</td>
+      <td>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;">
+          <button class="btn btn-primary btn-sm" onclick="editLogRow('${l.id}')">✏️</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteLog('${l.id}')">🗑</button>
+          ${l.status==='out'?`<button class="btn btn-ghost btn-sm" onclick="markReturned('${l.id}')">↩</button>`:''}
+        </div>
+      </td>
+    </tr>`).join('');
+  };
+
+  window.markReturned = async function(id) {
+    try {
+      await updateDoc(doc(db,'logs',id), { status:'returned', returned: new Date().toISOString() });
+      showToast('Marked as returned.','info');
+    } catch(e) { showToast('Error: '+e.message,'error'); }
+  };
+
+  window.editLogRow = function(id) {
+    const l   = window._state.logs.find(l => l.id === id);
+    const row = document.getElementById('log-row-' + id);
+    const itemOpts = window._state.items.map(i => `<option value="${i.id}" ${i.id===l.itemId?'selected':''}>${esc(i.name)}</option>`).join('');
+    row.innerHTML = `
+      <td class="edit-cell"><input id="el-scout-${id}" value="${esc(l.scout)}" /></td>
+      <td class="edit-cell"><select id="el-item-${id}">${itemOpts}</select></td>
+      <td class="edit-cell"><input id="el-qty-${id}" type="number" min="1" value="${l.qty}" style="width:60px;" /></td>
+      <td class="edit-cell"><input id="el-co-${id}" type="datetime-local" value="${toLocal(l.checkedOut)}" style="width:170px;" /></td>
+      <td class="edit-cell"><input id="el-ret-${id}" type="datetime-local" value="${l.returned?toLocal(l.returned):''}" style="width:170px;" /></td>
+      <td class="edit-cell">
+        <select id="el-status-${id}">
+          <option value="out" ${l.status==='out'?'selected':''}>OUT</option>
+          <option value="returned" ${l.status==='returned'?'selected':''}>RETURNED</option>
+        </select>
+      </td>
+      <td class="edit-cell"><input id="el-notes-${id}" value="${esc(l.notes||'')}" /></td>
+      <td>
+        <div style="display:flex;gap:5px;">
+          <button class="btn btn-gold btn-sm" onclick="saveLogEdit('${id}')">✓</button>
+          <button class="btn btn-ghost btn-sm" onclick="renderAdminLogs()">✕</button>
+        </div>
+      </td>`;
+  };
+
+  window.saveLogEdit = async function(id) {
+    const itemId = document.getElementById('el-item-'+id).value;
+    const item   = window._state.items.find(i => i.id===itemId);
+    const scout  = document.getElementById('el-scout-'+id).value.trim();
+    const qty    = parseInt(document.getElementById('el-qty-'+id).value)||1;
+    const coVal  = document.getElementById('el-co-'+id).value;
+    const retVal = document.getElementById('el-ret-'+id).value;
+    const status = document.getElementById('el-status-'+id).value;
+    const notes  = document.getElementById('el-notes-'+id).value.trim();
+    try {
+      await updateDoc(doc(db,'logs',id), {
+        scout, itemId, itemName: item?.name||'', qty, notes, status,
+        checkedOut: coVal ? new Date(coVal).toISOString() : new Date().toISOString(),
+        returned: retVal ? new Date(retVal).toISOString() : null,
+      });
+      showToast('Log updated!');
+    } catch(e) { showToast('Error: '+e.message,'error'); }
+  };
+
+  window.deleteLog = function(id) {
+    openConfirmModal('Delete this log entry?','This cannot be undone.', async () => {
+      try { await deleteDoc(doc(db,'logs',id)); showToast('Log deleted.','info'); closeModal(); }
+      catch(e) { showToast('Error: '+e.message,'error'); }
+    });
+  };
+
+  window.openAddLogModal = function() {
+    const itemOpts = window._state.items.map(i => `<option value="${i.id}">${esc(i.name)}</option>`).join('');
+    const now = toLocal(new Date().toISOString());
+    openModal('Add Log Entry', `
+      <div class="form-group" style="margin-bottom:12px;"><label>Scout Name</label><input id="al-scout" placeholder="Name" /></div>
+      <div class="form-group" style="margin-bottom:12px;"><label>Item</label><select id="al-item">${itemOpts}</select></div>
+      <div class="form-group" style="margin-bottom:12px;"><label>Quantity</label><input id="al-qty" type="number" min="1" value="1" /></div>
+      <div class="form-group" style="margin-bottom:12px;"><label>Checked Out</label><input id="al-co" type="datetime-local" value="${now}" /></div>
+      <div class="form-group" style="margin-bottom:12px;"><label>Status</label><select id="al-status"><option value="out">OUT</option><option value="returned">RETURNED</option></select></div>
+      <div class="form-group"><label>Notes</label><input id="al-notes" placeholder="Optional" /></div>
+    `, [
+      { label: 'Cancel', cls: 'btn-ghost', action: closeModal },
+      { label: 'Add Entry', cls: 'btn-gold', action: async () => {
+        const scout  = document.getElementById('al-scout').value.trim();
+        const itemId = document.getElementById('al-item').value;
+        const item   = window._state.items.find(i=>i.id===itemId);
+        const qty    = parseInt(document.getElementById('al-qty').value)||1;
+        const co     = document.getElementById('al-co').value;
+        const status = document.getElementById('al-status').value;
+        const notes  = document.getElementById('al-notes').value.trim();
+        if (!scout) { showToast('Name required.','error'); return; }
+        try {
+          await addDoc(logsCol, { scout, itemId, itemName: item?.name||'', qty, notes, status,
+            checkedOut: co ? new Date(co).toISOString() : new Date().toISOString(),
+            returned: status==='returned' ? new Date().toISOString() : null,
+          });
+          showToast('Entry added!'); closeModal();
+        } catch(e) { showToast('Error: '+e.message,'error'); }
+      }}
+    ]);
+  };
+
+  // ── HELPERS ──
+  function getAvailable(itemId) {
+    const item = window._state.items.find(i => i.id === itemId);
+    if (!item) return 0;
+    const out = window._state.logs.filter(l => l.itemId===itemId && l.status==='out').reduce((s,l)=>s+(l.qty||1),0);
+    return Math.max(0, item.qty - out);
+  }
+  window.getAvailable = getAvailable;
+
+  window.fmt = function(date) {
+    if (!date) return '—';
+    const d = new Date(date);
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+  };
+
+  window.toLocal = function(iso) {
+    if (!iso) return '';
+    return new Date(iso).toISOString().slice(0,16);
+  };
+
+  window.esc = function(str) {
+    return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  };
+
+</script>
+
+<style>
+  :root {
+    --navy: #0a1628;
+    --navy-mid: #112244;
+    --navy-light: #1a3366;
+    --blue: #1e5ca8;
+    --blue-light: #2e7dd6;
+    --gold: #c8a84b;
+    --gold-light: #e8c96b;
+    --silver: #a0b4cc;
+    --white: #f0f4ff;
+    --danger: #c0392b;
+    --success: #1e7c4a;
+    --card-bg: rgba(17,34,68,0.88);
+    --border: rgba(200,168,75,0.3);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Lato', sans-serif;
+    background: var(--navy);
+    color: var(--white);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 20% 20%, rgba(30,92,168,0.18) 0%, transparent 60%),
+      radial-gradient(ellipse at 80% 80%, rgba(200,168,75,0.08) 0%, transparent 50%),
+      repeating-linear-gradient(45deg, transparent, transparent 40px, rgba(255,255,255,0.012) 40px, rgba(255,255,255,0.012) 41px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; }
+
+  /* ── HEADER ── */
+  header {
+    background: linear-gradient(180deg, rgba(10,22,40,0.98) 0%, rgba(10,22,40,0.92) 100%);
+    border-bottom: 2px solid var(--gold);
+    text-align: center;
+  }
+
+  .header-top {
+    background: linear-gradient(90deg, transparent, rgba(200,168,75,0.1), transparent);
+    padding: 26px 20px 18px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* ── BSA FLEUR-DE-LIS ── */
+  .bsa-logo-wrap {
+    position: relative;
+    width: 100px;
+    height: 110px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .bsa-glow {
+    position: absolute;
+    inset: -18px;
+    background: radial-gradient(ellipse, rgba(200,168,75,0.28) 0%, transparent 70%);
+    pointer-events: none;
+    border-radius: 50%;
+  }
+
+  .bsa-svg {
+    width: 100px;
+    height: 110px;
+    filter: drop-shadow(0 0 14px rgba(200,168,75,0.55));
+    animation: bsa-float 4s ease-in-out infinite;
+  }
+
+  @keyframes bsa-float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-5px); }
+  }
+
+  h1 {
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.5rem, 4vw, 2.5rem);
+    font-weight: 900;
+    color: var(--gold);
+    letter-spacing: 0.08em;
+    text-shadow: 0 0 30px rgba(200,168,75,0.4);
+    line-height: 1.15;
+  }
+
+  .troop-sub {
+    font-family: 'Cinzel', serif;
+    font-size: clamp(0.72rem, 2vw, 0.95rem);
+    color: var(--silver);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+  }
+
+  /* sync indicator */
+  .sync-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #6edba0;
+    margin-left: 6px;
+    box-shadow: 0 0 6px #6edba0;
+    animation: pulse 2s infinite;
+    vertical-align: middle;
+  }
+  .sync-dot.offline { background: #f1948a; box-shadow: 0 0 6px #f1948a; animation: none; }
+  @keyframes pulse { 0%,100%{opacity:1;} 50%{opacity:0.4;} }
+
+  .header-nav {
+    display: flex;
+    justify-content: center;
+    border-top: 1px solid var(--border);
+  }
+
+  .nav-btn {
+    background: none;
+    border: none;
+    padding: 12px 26px;
+    font-family: 'Cinzel', serif;
+    font-size: 0.82rem;
+    letter-spacing: 0.1em;
+    color: var(--silver);
+    cursor: pointer;
+    border-right: 1px solid var(--border);
+    transition: all 0.2s;
+    text-transform: uppercase;
+  }
+  .nav-btn:last-child { border-right: none; }
+  .nav-btn:hover { color: var(--gold-light); background: rgba(200,168,75,0.08); }
+  .nav-btn.active { color: var(--gold); background: rgba(200,168,75,0.13); }
+
+  /* ── MAIN ── */
+  main { max-width: 1100px; margin: 0 auto; padding: 34px 18px 60px; }
+
+  .section { display: none; }
+  .section.active { display: block; animation: fadein 0.3s ease; }
+  @keyframes fadein { from{opacity:0;transform:translateY(10px);} to{opacity:1;transform:none;} }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 26px;
+    margin-bottom: 26px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 4px 32px rgba(0,0,0,0.35);
+  }
+
+  .card-title {
+    font-family: 'Cinzel', serif;
+    font-size: 1.05rem;
+    color: var(--gold);
+    letter-spacing: 0.08em;
+    margin-bottom: 18px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* ── TABLE ── */
+  .tbl-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; }
+  th {
+    font-family: 'Cinzel', serif;
+    font-weight: 600;
+    font-size: 0.76rem;
+    letter-spacing: 0.12em;
+    color: var(--gold);
+    text-align: left;
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(200,168,75,0.07);
+  }
+  td { padding: 11px 14px; border-bottom: 1px solid rgba(200,168,75,0.1); color: var(--white); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(30,92,168,0.12); }
+
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 0.76rem; font-weight: 700; letter-spacing: 0.05em; }
+  .badge-ok  { background: rgba(30,124,74,0.25);  color: #6edba0; border: 1px solid rgba(30,124,74,0.4); }
+  .badge-low { background: rgba(192,57,43,0.22);  color: #f1948a; border: 1px solid rgba(192,57,43,0.4); }
+  .badge-out { background: rgba(100,100,100,0.2); color: #bbb;    border: 1px solid rgba(100,100,100,0.3); }
+
+  /* ── BUTTONS ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 9px 20px; border-radius: 6px; border: none;
+    font-family: 'Lato', sans-serif; font-size: 0.88rem;
+    font-weight: 700; letter-spacing: 0.05em;
+    cursor: pointer; transition: all 0.18s; text-transform: uppercase;
+  }
+  .btn-primary { background: linear-gradient(135deg,var(--blue),var(--blue-light)); color:#fff; box-shadow:0 3px 14px rgba(30,92,168,0.4); }
+  .btn-primary:hover { filter:brightness(1.15); transform:translateY(-1px); }
+  .btn-gold { background: linear-gradient(135deg,var(--gold),var(--gold-light)); color:var(--navy); box-shadow:0 3px 14px rgba(200,168,75,0.35); }
+  .btn-gold:hover { filter:brightness(1.1); transform:translateY(-1px); }
+  .btn-danger { background: linear-gradient(135deg,var(--danger),#e74c3c); color:#fff; }
+  .btn-danger:hover { filter:brightness(1.1); }
+  .btn-sm { padding: 5px 12px; font-size: 0.76rem; }
+  .btn-ghost { background:transparent; border:1px solid var(--border); color:var(--silver); }
+  .btn-ghost:hover { border-color:var(--gold); color:var(--gold); }
+
+  /* ── FORMS ── */
+  .form-row { display:flex; gap:14px; flex-wrap:wrap; margin-bottom:16px; align-items:flex-end; }
+  .form-group { display:flex; flex-direction:column; gap:6px; flex:1; min-width:140px; }
+  label { font-size:0.76rem; font-weight:700; letter-spacing:0.08em; color:var(--silver); text-transform:uppercase; }
+  input, select, textarea {
+    background: rgba(10,22,40,0.8);
+    border: 1px solid var(--border);
+    border-radius: 6px; color: var(--white);
+    padding: 9px 13px; font-family:'Lato',sans-serif; font-size:0.9rem;
+    outline:none; transition:border-color 0.2s; width:100%;
+  }
+  input:focus, select:focus, textarea:focus { border-color:var(--gold); }
+  select option { background:var(--navy-mid); }
+
+  .checkout-form {
+    background: rgba(30,92,168,0.1);
+    border: 1px solid rgba(30,92,168,0.3);
+    border-radius: 8px; padding: 20px; margin-bottom: 20px;
+  }
+
+  .status-out { color:#f1948a; font-weight:700; }
+  .status-in  { color:#6edba0; font-weight:700; }
+
+  /* ── ADMIN ── */
+  #admin-lock {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 340px; gap: 20px; text-align: center;
+  }
+  .lock-icon { font-size: 3rem; margin-bottom: 4px; }
+  .lock-title { font-family:'Cinzel',serif; font-size:1.4rem; color:var(--gold); }
+  .lock-input-wrap { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+  #pw-input { width:280px; text-align:center; letter-spacing:0.2em; font-size:1rem; }
+  .pw-error { color:#f1948a; font-size:0.85rem; min-height:20px; }
+
+  .admin-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:22px; }
+  .admin-tab {
+    background:none; border:none; padding:10px 22px;
+    font-family:'Cinzel',serif; font-size:0.8rem; letter-spacing:0.08em;
+    color:var(--silver); cursor:pointer; border-bottom:2px solid transparent;
+    transition:all 0.2s; text-transform:uppercase; margin-bottom:-1px;
+  }
+  .admin-tab:hover { color:var(--gold); }
+  .admin-tab.active { color:var(--gold); border-bottom-color:var(--gold); }
+  .admin-panel { display:none; }
+  .admin-panel.active { display:block; animation:fadein 0.3s ease; }
+  .action-bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+
+  .edit-cell input, .edit-cell select { padding:4px 8px; font-size:0.84rem; border-radius:4px; width:100%; min-width:80px; }
+
+  /* ── MODAL ── */
+  .modal-overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,0.72); z-index:1000;
+    display:flex; align-items:center; justify-content:center; padding:20px;
+    backdrop-filter:blur(4px); animation:fadein 0.2s ease;
+  }
+  .modal-overlay.hidden { display:none; }
+  .modal {
+    background:var(--navy-mid); border:1px solid var(--gold); border-radius:10px;
+    padding:30px; max-width:480px; width:100%; box-shadow:0 20px 60px rgba(0,0,0,0.6);
+  }
+  .modal h3 { font-family:'Cinzel',serif; color:var(--gold); margin-bottom:20px; font-size:1.1rem; }
+  .modal-btns { display:flex; gap:10px; justify-content:flex-end; margin-top:20px; }
+
+  /* ── TOAST ── */
+  #toast {
+    position:fixed; bottom:28px; right:28px; z-index:2000;
+    padding:13px 22px; border-radius:8px; font-weight:700; font-size:0.9rem;
+    opacity:0; pointer-events:none; transition:opacity 0.3s;
+    min-width:200px; text-align:center;
+  }
+  #toast.show { opacity:1; }
+  #toast.success { background:var(--success); color:#fff; }
+  #toast.error   { background:var(--danger);  color:#fff; }
+  #toast.info    { background:var(--blue);    color:#fff; }
+
+  .empty { text-align:center; padding:30px; color:var(--silver); font-style:italic; }
+
+  /* ── CONFIG BANNER ── */
+  #config-banner {
+    background: linear-gradient(90deg, rgba(192,57,43,0.25), rgba(192,57,43,0.12));
+    border: 1px solid rgba(192,57,43,0.5);
+    border-radius: 8px; padding: 14px 20px; margin-bottom: 24px;
+    color: #f1948a; font-size: 0.88rem; line-height: 1.6;
+    display: none;
+  }
+  #config-banner strong { color: #fff; }
+
+  @media (max-width:600px) {
+    .form-row { flex-direction:column; }
+    .nav-btn { padding:10px 12px; font-size:0.7rem; }
+    main { padding:18px 12px 50px; }
+  }
+
+  footer {
+    text-align:center; padding:16px; font-size:0.75rem;
+    color:rgba(160,180,204,0.4); border-top:1px solid var(--border);
+    font-family:'Cinzel',serif; letter-spacing:0.15em;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="header-top">
+
+    <!-- BSA-STYLE FLEUR-DE-LIS -->
+    <div class="bsa-logo-wrap">
+      <div class="bsa-glow"></div>
+      <svg class="bsa-svg" viewBox="0 0 120 130" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <linearGradient id="goldG" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#f0d060"/>
+            <stop offset="50%" stop-color="#c8a84b"/>
+            <stop offset="100%" stop-color="#a07828"/>
+          </linearGradient>
+          <linearGradient id="goldG2" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#e8c060"/>
+            <stop offset="100%" stop-color="#c8a84b"/>
+          </linearGradient>
+          <linearGradient id="shieldG" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stop-color="#1e5ca8"/>
+            <stop offset="100%" stop-color="#0a2244"/>
+          </linearGradient>
+        </defs>
+
+        <!-- ═══ CENTER TOP PETAL ═══ -->
+        <!-- main petal body -->
+        <path d="M60 4 C54 12 50 22 50 32 C50 44 55 52 60 58 C65 52 70 44 70 32 C70 22 66 12 60 4Z" fill="url(#goldG)"/>
+        <!-- inner rib -->
+        <path d="M60 8 C57 15 55 24 55 32 C55 41 58 49 60 54 C62 49 65 41 65 32 C65 24 63 15 60 8Z" fill="#e8c96b" opacity="0.5"/>
+        <!-- tip orb -->
+        <circle cx="60" cy="4" r="4.5" fill="url(#goldG)"/>
+        <circle cx="60" cy="4" r="2.5" fill="#f0d878"/>
+
+        <!-- ═══ LEFT PETAL ═══ -->
+        <path d="M60 44 C52 38 38 34 26 38 C17 41 14 49 18 56 C22 63 32 64 42 60 C51 57 57 51 60 46Z" fill="url(#goldG)"/>
+        <path d="M60 44 C53 39 41 36 30 39 C23 42 21 48 24 54 C27 59 36 60 44 57 C52 54 58 49 60 47Z" fill="#e8c96b" opacity="0.4"/>
+        <!-- left tip orb -->
+        <circle cx="15" cy="47" r="4" fill="url(#goldG)"/>
+        <circle cx="15" cy="47" r="2.2" fill="#f0d878"/>
+
+        <!-- ═══ RIGHT PETAL ═══ -->
+        <path d="M60 44 C68 38 82 34 94 38 C103 41 106 49 102 56 C98 63 88 64 78 60 C69 57 63 51 60 46Z" fill="url(#goldG)"/>
+        <path d="M60 44 C67 39 79 36 90 39 C97 42 99 48 96 54 C93 59 84 60 76 57 C68 54 62 49 60 47Z" fill="#e8c96b" opacity="0.4"/>
+        <!-- right tip orb -->
+        <circle cx="105" cy="47" r="4" fill="url(#goldG)"/>
+        <circle cx="105" cy="47" r="2.2" fill="#f0d878"/>
+
+        <!-- ═══ BSA SHIELD on center petal ═══ -->
+        <path d="M51 22 L51 36 Q51 42 60 46 Q69 42 69 36 L69 22 Z" fill="url(#shieldG)" stroke="#c8a84b" stroke-width="0.8"/>
+        <!-- Eagle silhouette in shield -->
+        <path d="M60 24 C58 26 55 27 54 29 C56 29 57 30 57 31 C55 31 54 32 54 33 C56 33 57 34 58 36 L60 37 L62 36 C63 34 64 33 66 33 C66 32 65 31 63 31 C63 30 64 29 66 29 C65 27 62 26 60 24Z" fill="#c8a84b" opacity="0.9"/>
+        <!-- Shield horizontal bar -->
+        <rect x="52" y="30" width="16" height="1.2" fill="#c8a84b" opacity="0.6"/>
+
+        <!-- ═══ TWO STARS (BSA style) ═══ -->
+        <!-- Left star -->
+        <polygon points="38,38 39.2,41.8 43,41.8 40,43.8 41.2,47.6 38,45.6 34.8,47.6 36,43.8 33,41.8 36.8,41.8" fill="url(#goldG)" transform="scale(0.7) translate(17,18)"/>
+        <!-- Right star -->
+        <polygon points="82,38 83.2,41.8 87,41.8 84,43.8 85.2,47.6 82,45.6 78.8,47.6 80,43.8 77,41.8 80.8,41.8" fill="url(#goldG)" transform="scale(0.7) translate(-29,18)"/>
+
+        <!-- ═══ COLLAR / KNOT BAND ═══ -->
+        <path d="M42 62 Q60 70 78 62 L76 70 Q60 78 44 70 Z" fill="url(#goldG)"/>
+        <path d="M44 63 Q60 70 76 63 L75 68 Q60 75 45 68 Z" fill="#e8c96b" opacity="0.35"/>
+
+        <!-- ═══ STEM ═══ -->
+        <rect x="56" y="70" width="8" height="18" rx="2" fill="url(#goldG)"/>
+        <rect x="58" y="70" width="4" height="18" rx="1" fill="#e8c96b" opacity="0.35"/>
+
+        <!-- ═══ BASE SCROLL ═══ -->
+        <path d="M44 88 Q60 96 76 88 L74 98 Q60 106 46 98 Z" fill="url(#goldG)"/>
+        <path d="M48 90 Q60 97 72 90 L71 96 Q60 102 49 96 Z" fill="#e8c96b" opacity="0.3"/>
+        <!-- Scroll end curls -->
+        <path d="M44 88 Q38 90 40 96 Q42 100 46 98" fill="none" stroke="url(#goldG)" stroke-width="1.5"/>
+        <path d="M76 88 Q82 90 80 96 Q78 100 74 98" fill="none" stroke="url(#goldG)" stroke-width="1.5"/>
+      </svg>
+    </div>
+
+    <h1>Troop 4 Quartermaster</h1>
+    <div class="troop-sub">
+      Troop 4 &nbsp;·&nbsp; Scarsdale
+      <span class="sync-dot" id="sync-dot" title="Live sync active"></span>
+    </div>
+  </div>
+
+  <nav class="header-nav">
+    <button class="nav-btn active" onclick="showSection('inventory',this)">📦 Inventory</button>
+    <button class="nav-btn" onclick="showSection('checkout',this)">📋 Check Out</button>
+    <button class="nav-btn" onclick="showSection('log',this)">📜 Log</button>
+    <button class="nav-btn" onclick="showSection('admin',this)">🔒 Admin</button>
+  </nav>
+</header>
+
+<main>
+
+  <!-- Config banner (shown if Firebase not set up) -->
+  <div id="config-banner">
+    ⚠️ <strong>Firebase not configured yet.</strong> Open this file in a text editor, find the <code>firebaseConfig</code> block near the top, and replace the placeholder values with your Firebase project credentials. See <strong>SETUP_GUIDE.md</strong> for step-by-step instructions.
+  </div>
+
+  <!-- ══ INVENTORY ══ -->
+  <div class="section active" id="section-inventory">
+    <div class="card">
+      <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--gold)"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v2"/></svg>
+        Current Inventory
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Item</th><th>Category</th><th>Total Qty</th><th>Available</th><th>Status</th></tr></thead>
+          <tbody id="inventory-body"><tr><td colspan="5" class="empty">Connecting to database…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ CHECKOUT ══ -->
+  <div class="section" id="section-checkout">
+    <div class="card">
+      <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--gold)"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="1"/><path d="M9 12h6M9 16h4"/></svg>
+        Check Out an Item
+      </div>
+      <div class="checkout-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Your Name</label>
+            <input type="text" id="co-name" placeholder="First Last" />
+          </div>
+          <div class="form-group">
+            <label>Item</label>
+            <select id="co-item"><option>Loading…</option></select>
+          </div>
+          <div class="form-group" style="max-width:120px;">
+            <label>Quantity</label>
+            <input type="number" id="co-qty" min="1" value="1" />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Notes (optional)</label>
+            <input type="text" id="co-notes" placeholder="e.g. for weekend campout" />
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn btn-gold" onclick="checkoutItem()">✓ Check Out Item</button>
+          <button class="btn btn-primary" onclick="returnItem()">↩ Return Item</button>
+        </div>
+      </div>
+
+      <div class="card-title" style="margin-top:4px;">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--gold)"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        Active Checkouts
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Scout</th><th>Item</th><th>Qty</th><th>Checked Out</th><th>Notes</th></tr></thead>
+          <tbody id="active-checkouts-body"><tr><td colspan="5" class="empty">Connecting…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ LOG ══ -->
+  <div class="section" id="section-log">
+    <div class="card">
+      <div class="card-title">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--gold)"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+        Full Checkout Log
+      </div>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>Scout</th><th>Item</th><th>Qty</th><th>Checked Out</th><th>Returned</th><th>Status</th><th>Notes</th></tr></thead>
+          <tbody id="log-body"><tr><td colspan="7" class="empty">Connecting…</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ ADMIN ══ -->
+  <div class="section" id="section-admin">
+    <div class="card" id="admin-lock">
+      <div class="lock-icon">🔐</div>
+      <div class="lock-title">Admin Access</div>
+      <p style="color:var(--silver);font-size:0.9rem;">Enter the quartermaster password to continue.</p>
+      <div class="lock-input-wrap">
+        <input type="password" id="pw-input" placeholder="Password" onkeydown="if(event.key==='Enter')unlockAdmin()" />
+        <button class="btn btn-gold" onclick="unlockAdmin()">Unlock</button>
+      </div>
+      <div class="pw-error" id="pw-error"></div>
+    </div>
+
+    <div id="admin-content" style="display:none;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:10px;">
+        <h2 style="font-family:'Cinzel',serif;color:var(--gold);font-size:1.2rem;">⚙️ Admin Panel</h2>
+        <button class="btn btn-ghost btn-sm" onclick="lockAdmin()">🔒 Lock</button>
+      </div>
+      <div class="admin-tabs">
+        <button class="admin-tab active" onclick="switchAdminTab('items',this)">Manage Items</button>
+        <button class="admin-tab" onclick="switchAdminTab('logs',this)">Manage Logs</button>
+      </div>
+
+      <div class="admin-panel active" id="admin-items">
+        <div class="action-bar">
+          <button class="btn btn-gold btn-sm" onclick="openAddItemModal()">+ Add Item</button>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Item Name</th><th>Category</th><th>Total Qty</th><th>Actions</th></tr></thead>
+            <tbody id="admin-items-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="admin-panel" id="admin-logs">
+        <div class="action-bar">
+          <button class="btn btn-gold btn-sm" onclick="openAddLogModal()">+ Add Log Entry</button>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead><tr><th>Scout</th><th>Item</th><th>Qty</th><th>Checked Out</th><th>Returned</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead>
+            <tbody id="admin-logs-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<footer>Troop 4 Quartermaster &nbsp;·&nbsp; Scarsdale, NY &nbsp;·&nbsp; Boy Scouts of America</footer>
+
+<!-- MODAL -->
+<div class="modal-overlay hidden" id="modal-overlay" onclick="closeModalOnBg(event)">
+  <div class="modal" id="modal-box">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-btns" id="modal-btns"></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast"></div>
+
+<script>
+  const ADMIN_PW = 'Troop4QuarterMaster';
+
+  // ── Check if Firebase is configured ──
+  window.addEventListener('load', () => {
+    setTimeout(() => {
+      if (!window._state || !window._state.items) {
+        document.getElementById('config-banner').style.display = 'block';
+        document.getElementById('sync-dot').classList.add('offline');
+      }
+    }, 3000);
+  });
+
+  // Detect unconfigured Firebase
+  window.addEventListener('unhandledrejection', e => {
+    if (e.reason && String(e.reason).includes('Firebase')) {
+      document.getElementById('config-banner').style.display = 'block';
+      document.getElementById('sync-dot').classList.add('offline');
+    }
+  });
+
+  // ── NAVIGATION ──
+  function showSection(id, btn) {
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('section-' + id).classList.add('active');
+    if (btn) btn.classList.add('active');
+    if (id === 'inventory') renderInventory();
+    if (id === 'checkout') { renderCheckoutSelect(); renderActiveCheckouts(); }
+    if (id === 'log') renderLog();
+    if (id === 'admin' && window._state?.adminUnlocked) { renderAdminItems(); renderAdminLogs(); }
+  }
+
+  // ── ADMIN LOCK ──
+  function unlockAdmin() {
+    const pw = document.getElementById('pw-input').value;
+    if (pw === ADMIN_PW) {
+      window._state.adminUnlocked = true;
+      document.getElementById('admin-lock').style.display = 'none';
+      document.getElementById('admin-content').style.display = 'block';
+      document.getElementById('pw-error').textContent = '';
+      renderAdminItems();
+      renderAdminLogs();
+    } else {
+      document.getElementById('pw-error').textContent = 'Incorrect password.';
+      document.getElementById('pw-input').value = '';
+    }
+  }
+
+  function lockAdmin() {
+    window._state.adminUnlocked = false;
+    document.getElementById('admin-lock').style.display = 'flex';
+    document.getElementById('admin-content').style.display = 'none';
+    document.getElementById('pw-input').value = '';
+  }
+
+  function switchAdminTab(tab, btn) {
+    document.querySelectorAll('.admin-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.admin-panel').forEach(p => p.classList.remove('active'));
+    if (btn) btn.classList.add('active');
+    document.getElementById('admin-' + tab).classList.add('active');
+  }
+
+  // ── MODAL ──
+  function openModal(title, bodyHtml, btns) {
+    document.getElementById('modal-title').textContent = title;
+    document.getElementById('modal-body').innerHTML = bodyHtml;
+    document.getElementById('modal-btns').innerHTML = btns.map((b,i) =>
+      `<button class="btn ${b.cls}" id="modal-btn-${i}">${b.label}</button>`
+    ).join('');
+    btns.forEach((b,i) => document.getElementById('modal-btn-'+i).onclick = b.action);
+    document.getElementById('modal-overlay').classList.remove('hidden');
+  }
+
+  function openConfirmModal(title, msg, onConfirm) {
+    openModal(title, `<p style="color:var(--silver);line-height:1.6">${msg}</p>`, [
+      { label:'Cancel', cls:'btn-ghost', action: closeModal },
+      { label:'Confirm', cls:'btn-danger', action: onConfirm },
+    ]);
+  }
+
+  function closeModal() { document.getElementById('modal-overlay').classList.add('hidden'); }
+  function closeModalOnBg(e) { if (e.target.id==='modal-overlay') closeModal(); }
+
+  // ── TOAST ──
+  function showToast(msg, type='success') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = `show ${type}`;
+    setTimeout(() => { t.className = ''; }, 3000);
+  }
+</script>
+</body>
+</html>
