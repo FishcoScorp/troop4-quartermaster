@@ -96,7 +96,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
 <div class="page">
 <header>
   <div class="header-top">
-    <span class="ver">v1.8.0</span>
+    <span class="ver">v1.9.0</span>
     <img class="logo-img" src="logo.png" alt="Scout logo">
     <h1>Troop 4 Quartermaster</h1>
     <div class="troop-sub">Troop 4 &nbsp;·&nbsp; Scarsdale <span class="sdot" id="sdot"></span></div>
@@ -247,7 +247,7 @@ function avail(id){
   var out=logs.filter(function(l){return l.itemId===id&&l.status==='out';}).reduce(function(s,l){return s+(l.qty||1);},0);
   return Math.max(0,item.qty-out);
 }
-function fmt(d){if(!d)return'—';var x=new Date(d);return x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+x.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});}
+function fmt(d){if(!d)return'-';var x=new Date(d);return x.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})+' '+x.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});}
 function loc(iso){return iso?new Date(iso).toISOString().slice(0,16):'';}
 function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 function toast(m,t){var x=document.getElementById('toast');x.textContent=m;x.className='show '+(t||'ok');setTimeout(function(){x.className='';},3000);}
@@ -295,12 +295,12 @@ function returnById(id){
 function renderActive(){
   var tb=document.getElementById('active-body'),active=logs.filter(function(l){return l.status==='out';});
   if(!active.length){tb.innerHTML='<tr><td colspan="6" class="empty">No active checkouts.</td></tr>';return;}
-  tb.innerHTML=active.map(function(l){return'<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+esc(l.notes||'—')+'</td><td><button class="btn bp bsm" onclick="returnById(''+l.id+'')">Return</button></td></tr>';}).join('');
+  tb.innerHTML=active.map(function(l){return'<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'')+'</td><td><button class="btn bp bsm" onclick="returnById(''+l.id+'')">Return</button></td></tr>';}).join('');
 }
 function renderLog(){
   var tb=document.getElementById('log-body');
   if(!logs.length){tb.innerHTML='<tr><td colspan="7" class="empty">No entries yet.</td></tr>';return;}
-  tb.innerHTML=logs.map(function(l){return'<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+esc(l.notes||'—')+'</td></tr>';}).join('');
+  tb.innerHTML=logs.map(function(l){return'<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'')+'</td></tr>';}).join('');
 }
 var PWH='f99d130cfe5fc205a465ca6a7ad3937374f4c8e1004589014a58448807b84dd6';
 function unlockAdmin(){
@@ -350,7 +350,7 @@ function renderALogs(){
   if(!logs.length){tb.innerHTML='<tr><td colspan="8" class="empty">No logs.</td></tr>';return;}
   tb.innerHTML=logs.map(function(l){
     var ret=l.status==='out'?'<button class="btn bgh bsm" onclick="markRet(''+l.id+'')">Return</button>':'';
-    return'<tr id="lr-'+l.id+'"><td>'+esc(l.scout)+'</td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td style="font-size:0.8rem">'+fmt(l.checkedOut)+'</td><td style="font-size:0.8rem">'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+esc(l.notes||'—')+'</td><td><div style="display:flex;gap:5px;flex-wrap:wrap"><button class="btn bp bsm" onclick="editLR(''+l.id+'')">Edit</button><button class="btn bd bsm" onclick="delLog(''+l.id+'')">Delete</button>'+ret+'</div></td></tr>';
+    return'<tr id="lr-'+l.id+'"><td>'+esc(l.scout)+'</td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td style="font-size:0.8rem">'+fmt(l.checkedOut)+'</td><td style="font-size:0.8rem">'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'')+'</td><td><div style="display:flex;gap:5px;flex-wrap:wrap"><button class="btn bp bsm" onclick="editLR(''+l.id+'')">Edit</button><button class="btn bd bsm" onclick="delLog(''+l.id+'')">Delete</button>'+ret+'</div></td></tr>';
   }).join('');
 }
 function markRet(id){fsPatch('logs',id,{status:'returned',returned:new Date().toISOString()},function(e){if(e){toast('Error.','er');return;}toast('Marked returned.','inf');loadAll();});}
