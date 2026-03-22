@@ -858,7 +858,14 @@
 <div id="toast"></div>
 
 <script>
-  const ADMIN_PW = 'Troop4QuarterMaster';
+  const ADMIN_PW_HASH = 'f99d130cfe5fc205a465ca6a7ad3937374f4c8e1004589014a58448807b84dd6';
+
+  async function hashPassword(pw) {
+    const msgBuffer = new TextEncoder().encode(pw);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  }
 
   // ── Check if Firebase is configured ──
   window.addEventListener('load', () => {
@@ -891,9 +898,10 @@
   }
 
   // ── ADMIN LOCK ──
-  function unlockAdmin() {
+  async function unlockAdmin() {
     const pw = document.getElementById('pw-input').value;
-    if (pw === ADMIN_PW) {
+    const hashed = await hashPassword(pw);
+    if (hashed === ADMIN_PW_HASH) {
       window._state.adminUnlocked = true;
       document.getElementById('admin-lock').style.display = 'none';
       document.getElementById('admin-content').style.display = 'block';
