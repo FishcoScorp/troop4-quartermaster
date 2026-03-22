@@ -96,7 +96,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
 <div class="page">
 <header>
   <div class="header-top">
-    <span class="ver">v2.2.0</span>
+    <span class="ver">v2.3.0</span>
     <img class="logo-img" src="logo.png" alt="Scout logo">
     <h1>Troop 4 Quartermaster</h1>
     <div class="troop-sub">Troop 4 &nbsp;·&nbsp; Scarsdale <span class="sdot" id="sdot"></span></div>
@@ -155,7 +155,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
         <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--gold)" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
         <div class="lrule"></div>
         <div class="ltitle">Admin Access</div>
-        <div class="lsub">Quartermaster credentials required</div>
+        <div class="lsub" style="text-align:center">Quartermaster credentials required</div>
         <div class="liw">
           <input type="password" id="pwi" placeholder="Enter password" onkeydown="if(event.key==='Enter')unlockAdmin()">
           <button class="bunlock" onclick="unlockAdmin()">Unlock Panel</button>
@@ -180,7 +180,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
         </table></div>
       </div>
       <div class="apanel" id="ap-logs">
-        <div class="abar"><button class="btn bg bsm" onclick="openAddLog()">+ Add Log Entry</button></div>
+        <div class="abar"><button class="btn bg bsm" onclick="openAddLog()">+ Add Log Entry</button><button class="btn bd bsm" onclick="clearAllLogs()">Clear All Logs</button></div>
         <div class="tbl-wrap"><table>
           <thead><tr><th>Scout</th><th>Item</th><th>Qty</th><th>Out</th><th>Returned</th><th>Status</th><th>Notes</th><th>Actions</th></tr></thead>
           <tbody id="al-body"></tbody>
@@ -478,6 +478,19 @@ function openAddLog(){
   ]);
 }
 
+function clearAllLogs(){
+  openConfirm('Clear All Logs?','This permanently deletes every log entry. This cannot be undone.',function(){
+    var toDelete=logs.slice();
+    var count=0;
+    if(!toDelete.length){toast('No logs to clear.','inf');closeModal();return;}
+    toDelete.forEach(function(l){
+      fsDel('logs',l.id,function(){
+        count++;
+        if(count===toDelete.length){toast('All logs cleared.','inf');loadAll();closeModal();}
+      });
+    });
+  });
+}
 function openModal(title,body,btns){
   document.getElementById('mo-title').textContent=title;
   document.getElementById('mo-body').innerHTML=body;
