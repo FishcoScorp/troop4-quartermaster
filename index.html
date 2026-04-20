@@ -97,7 +97,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
 <div class="page">
 <header>
   <div class="header-top">
-    <span class="ver">v3.0.0</span>
+    <span class="ver">v3.3.0</span>
     <img class="logo-img" src="logo.png" alt="Scout logo">
     <h1>Troop 4 Quartermaster</h1>
     <div class="troop-sub">Troop 4 &nbsp;·&nbsp; Scarsdale <span class="sdot" id="sdot"></span></div>
@@ -138,12 +138,9 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
       <div class="co-form">
         <div class="form-row">
           <div class="fg"><label>Your Name</label><input id="co-name" placeholder="First Last"></div>
-          <div class="fg"><label>Item</label><select id="co-item" onchange="onItemChange()"><option>Loading...</option></select></div>
-          <div class="fg" style="max-width:120px"><label>Quantity</label><input type="number" id="co-qty" min="1" value="1"></div>
+          <div class="fg"><label>Item</label><select id="co-item" onchange="onItemChange()"><option value="">Select an item...</option></select></div>
         </div>
-        <div class="form-row">
-          <div class="fg"><label>Notes: Campout, Tent #, etc. (Optional)</label><input id="co-notes" placeholder="e.g. for weekend campout"></div>
-        </div>
+        <div id="co-dynamic-fields"></div>
         <button class="btn bg" onclick="checkoutItem()">Check Out Item</button>
       </div>
       <div class="card-title">Active Checkouts</div>
@@ -360,6 +357,9 @@ function loadAll(){
       logs=d2;logs.sort(function(a,b){return new Date(b.checkedOut)-new Date(a.checkedOut);});
       document.getElementById('sdot').classList.remove('err');
       purge();render();
+      loadReports();
+      loadAnnouncement();
+      loadConsumables();
     });
   });
 }
@@ -393,12 +393,17 @@ function showSection(id){
   document.getElementById('section-'+id).classList.add('active');
   document.getElementById('nb-'+id).classList.add('active');
   render();
+  if(id==='report'){renderReportSelect();renderReports();}
+  if(id==='consumables'){renderConsumableSelect();renderConsumables();renderRestocks();}
+  if(id==='inventory'){setTimeout(initQR,300);}
 }
 
 function renderInv(){
+  var q=(document.getElementById('inv-search')||{value:''}).value.toLowerCase();
   var tb=document.getElementById('inv-body');
-  if(!items.length){tb.innerHTML='<tr><td colspan="5" class="empty">No items yet.</td></tr>';return;}
-  tb.innerHTML=items.map(function(item){
+  var filtered=q?items.filter(function(item){return (item.name||'').toLowerCase().indexOf(q)>-1||(item.category||'').toLowerCase().indexOf(q)>-1||(item.location||'').toLowerCase().indexOf(q)>-1;}):items;
+  if(!filtered.length){tb.innerHTML='<tr><td colspan="6" class="empty">'+(q?'No items match.':'No items yet.')+'</td></tr>';return;}
+  tb.innerHTML=filtered.map(function(item){
     var a=avail(item.id),p=item.qty?a/item.qty:0,bc=a===0?'bout':p<=0.3?'blow':'bok',bt=a===0?'OUT':p<=0.3?'LOW':'IN STOCK';
     return '<tr><td><strong>'+esc(item.name)+'</strong></td><td><span style="color:var(--silver)">'+esc(item.category||'')+'</span></td><td><span style="color:var(--silver);font-size:0.82rem">'+esc(item.location||'-')+'</span></td><td>'+item.qty+'</td><td><strong>'+a+'</strong></td><td><span class="badge '+bc+'">'+bt+'</span></td></tr>';
   }).join('');
@@ -433,23 +438,12 @@ function renderActive(){
   var tb=document.getElementById('active-body');
   var active=logs.filter(function(l){return l.status==='out';});
   if(!active.length){tb.innerHTML='<tr><td colspan="6" class="empty">No active checkouts.</td></tr>';return;}
-  var rows='';
-  for(var i=0;i<active.length;i++){
-    var l=active[i];
-    var tr=document.createElement('tr');
-    tr.innerHTML='<td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td>';
-    var td=document.createElement('td');
-    var btn=document.createElement('button');
-    btn.className='btn bp bsm';btn.textContent='Return';
-    (function(lid){btn.addEventListener('click',function(){returnById(lid);});})(l.id);
-    td.appendChild(btn);tr.appendChild(td);
-    tb.appendChild(tr);
-  }
   tb.innerHTML='';
   for(var i=0;i<active.length;i++){
     var l=active[i];
     var tr=document.createElement('tr');
-    tr.innerHTML='<td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td>';
+    var nameCell=esc(l.itemName)+(l.tentNumber?'<br><span style="color:var(--silver);font-size:0.78rem">Tent #'+esc(l.tentNumber)+'</span>':'');
+    tr.innerHTML='<td><strong>'+esc(l.scout)+'</strong></td><td>'+nameCell+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td>';
     var td=document.createElement('td');
     var btn=document.createElement('button');
     btn.className='btn bp bsm';btn.textContent='Return';
@@ -459,10 +453,13 @@ function renderActive(){
 }
 
 function renderLog(){
+  var q=(document.getElementById('log-search')||{value:''}).value.toLowerCase();
   var tb=document.getElementById('log-body');
-  if(!logs.length){tb.innerHTML='<tr><td colspan="7" class="empty">No entries yet.</td></tr>';return;}
-  tb.innerHTML=logs.map(function(l){
-    return '<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td></tr>';
+  var filtered=q?logs.filter(function(l){return (l.scout||'').toLowerCase().indexOf(q)>-1||(l.itemName||'').toLowerCase().indexOf(q)>-1||(l.tentNumber||'').indexOf(q)>-1;}):logs;
+  if(!filtered.length){tb.innerHTML='<tr><td colspan="7" class="empty">'+(q?'No entries match.':'No entries yet.')+'</td></tr>';return;}
+  tb.innerHTML=filtered.map(function(l){
+    var nameCell=esc(l.itemName)+(l.tentNumber?'<br><span style="color:var(--silver);font-size:0.78rem">Tent #'+esc(l.tentNumber)+'</span>':'');
+    return '<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+nameCell+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td></tr>';
   }).join('');
 }
 
@@ -492,8 +489,12 @@ function lockAdmin(){
 function switchTab(t){
   document.querySelectorAll('.atab').forEach(function(x){x.classList.remove('active');});
   document.querySelectorAll('.apanel').forEach(function(x){x.classList.remove('active');});
-  document.getElementById('at-'+t).classList.add('active');
-  document.getElementById('ap-'+t).classList.add('active');
+  var tab=document.getElementById('at-'+t);
+  var panel=document.getElementById('ap-'+t);
+  if(tab)tab.classList.add('active');
+  if(panel)panel.classList.add('active');
+  if(t==='reports')renderAdminReports();
+  if(t==='consumables'){renderAdminCons();renderAdminRestocks();}
 }
 
 function renderAItems(){
@@ -914,61 +915,12 @@ function initQR(){
 }
 
 // -- SEARCH (filter existing render functions) --
-var _origRenderInv = renderInv;
-renderInv = function(){
-  var q=(document.getElementById('inv-search')||{value:''}).value.toLowerCase();
-  if(!q){_origRenderInv();return;}
-  var tb=document.getElementById('inv-body');
-  var filtered=items.filter(function(i){return (i.name||'').toLowerCase().indexOf(q)>-1||(i.category||'').toLowerCase().indexOf(q)>-1;});
-  if(!filtered.length){tb.innerHTML='<tr><td colspan="5" class="empty">No items match your search.</td></tr>';return;}
-  tb.innerHTML=filtered.map(function(item){
-    var a=avail(item.id),p=item.qty?a/item.qty:0,bc=a===0?'bout':p<=0.3?'blow':'bok',bt=a===0?'OUT':p<=0.3?'LOW':'IN STOCK';
-    return '<tr><td><strong>'+esc(item.name)+'</strong></td><td><span style="color:var(--silver)">'+esc(item.category||'')+'</span></td><td><span style="color:var(--silver);font-size:0.82rem">'+esc(item.location||'-')+'</span></td><td>'+item.qty+'</td><td><strong>'+a+'</strong></td><td><span class="badge '+bc+'">'+bt+'</span></td></tr>';
-  }).join('');
-};
-
-var _origRenderLog = renderLog;
-renderLog = function(){
-  var q=(document.getElementById('log-search')||{value:''}).value.toLowerCase();
-  if(!q){_origRenderLog();return;}
-  var tb=document.getElementById('log-body');
-  var filtered=logs.filter(function(l){return (l.scout||'').toLowerCase().indexOf(q)>-1||(l.itemName||'').toLowerCase().indexOf(q)>-1;});
-  if(!filtered.length){tb.innerHTML='<tr><td colspan="7" class="empty">No entries match.</td></tr>';return;}
-  tb.innerHTML=filtered.map(function(l){
-    return '<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+esc(l.itemName)+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td></tr>';
-  }).join('');
-};
 
 // -- PATCH showSection to handle report tab --
-var _origShowSection = showSection;
-showSection = function(id){
-  _origShowSection(id);
-  if(id==='report'){renderReportSelect();renderReports();}
-  if(id==='consumables'){renderConsumableSelect();renderConsumables();renderRestocks();}
-  if(id==='inventory'){setTimeout(initQR,300);}
-};
 
 // -- PATCH switchTab to handle new admin tabs --
-var _origSwitchTab = switchTab;
-switchTab = function(t){
-  document.querySelectorAll('.atab').forEach(function(x){x.classList.remove('active');});
-  document.querySelectorAll('.apanel').forEach(function(x){x.classList.remove('active');});
-  var tab=document.getElementById('at-'+t);
-  var panel=document.getElementById('ap-'+t);
-  if(tab)tab.classList.add('active');
-  if(panel)panel.classList.add('active');
-  if(t==='reports')renderAdminReports();
-  if(t==='consumables'){renderAdminCons();renderAdminRestocks();}
-};
 
 // -- PATCH loadAll to also load reports and announcement --
-var _origLoadAll = loadAll;
-loadAll = function(){
-  _origLoadAll();
-  loadReports();
-  loadAnnouncement();
-  loadConsumables();
-};
 
 // Init QR on page load
 setTimeout(initQR, 500);
@@ -978,200 +930,94 @@ setTimeout(initQR, 500);
 function onItemChange(){
   var itemId=document.getElementById('co-item').value;
   var item=items.find(function(i){return i.id===itemId;});
-  var tentRow=document.getElementById('tent-number-row');
-  var qtyWrap=document.getElementById('co-qty-wrap');
-  if(item&&item.hasTentNumbers==='true'){
-    tentRow.style.display='flex';
-    qtyWrap.style.display='none';
-    populateTentNumbers(item);
-  }else{
-    tentRow.style.display='none';
-    qtyWrap.style.display='block';
+  var dyn=document.getElementById('co-dynamic-fields');
+  dyn.innerHTML='';
+  if(!item)return;
+
+  var html='<div class="form-row">';
+
+  // Tent number field
+  if(item.hasTentNumbers==='true'){
+    var allNums=(item.tentNumbers||'').split(',').map(function(n){return n.trim();}).filter(Boolean);
+    var outNums=logs.filter(function(l){return l.itemId===item.id&&l.status==='out';}).map(function(l){return l.tentNumber;});
+    html+='<div class="fg" style="max-width:220px"><label>Tent Number</label><select id="co-tent-num"><option value="">Select tent #...</option>';
+    allNums.forEach(function(n){
+      var out=outNums.indexOf(n)>-1;
+      html+='<option value="'+n+'"'+(out?' disabled':'')+'>Tent #'+n+(out?' (OUT)':'')+'</option>';
+    });
+    html+='</select></div>';
+  } else {
+    // Regular item - show quantity
+    html+='<div class="fg" style="max-width:120px"><label>Quantity</label><input type="number" id="co-qty" min="1" max="'+item.qty+'" value="1"></div>';
   }
+
+  // Notes field always shown
+  html+='<div class="fg"><label>Notes (optional)</label><input id="co-notes" placeholder="e.g. for weekend campout"></div>';
+  html+='</div>';
+
+  // Location hint
+  if(item.location){
+    html+='<p style="color:var(--silver);font-size:0.8rem;margin-bottom:12px">Location: '+item.location+'</p>';
+  }
+
+  // Availability info
+  var a=avail(item.id);
+  var pct=item.qty?a/item.qty:0;
+  var col=a===0?'#f1948a':pct<=0.3?'#f0c060':'#6edba0';
+  html+='<p style="font-size:0.82rem;margin-bottom:14px;color:'+col+'">'+a+' of '+item.qty+' available</p>';
+
+  dyn.innerHTML=html;
 }
 
-function populateTentNumbers(item){
-  var sel=document.getElementById('co-tent-num');
-  var allNums=(item.tentNumbers||'').split(',').map(function(n){return n.trim();}).filter(Boolean);
-  // Find which are already checked out
-  var outNums=logs.filter(function(l){return l.itemId===item.id&&l.status==='out';}).map(function(l){return l.tentNumber;});
-  sel.innerHTML='<option value="">Select tent number...</option>';
-  allNums.forEach(function(n){
-    var out=outNums.indexOf(n)>-1;
-    var opt=document.createElement('option');
-    opt.value=n;opt.textContent='Tent #'+n+(out?' (CHECKED OUT)':'');
-    if(out)opt.disabled=true;
-    sel.appendChild(opt);
-  });
-}
 
-// Override checkoutItem to handle tent numbers
+// Override checkoutItem to handle dynamic fields
 var _origCheckoutItem=checkoutItem;
 checkoutItem=function(){
+  var name=document.getElementById('co-name').value.trim();
   var itemId=document.getElementById('co-item').value;
   var item=items.find(function(i){return i.id===itemId;});
-  if(item&&item.hasTentNumbers==='true'){
-    var tentNum=document.getElementById('co-tent-num').value;
-    var name=document.getElementById('co-name').value.trim();
-    if(!name){toast('Enter your name.','er');return;}
+  if(!name){toast('Enter your name.','er');return;}
+  if(!itemId){toast('Select an item.','er');return;}
+  if(!item){toast('Item not found.','er');return;}
+
+  if(item.hasTentNumbers==='true'){
+    var tentNumEl=document.getElementById('co-tent-num');
+    var tentNum=tentNumEl?tentNumEl.value:'';
     if(!tentNum){toast('Select a tent number.','er');return;}
-    var notes='Tent #'+tentNum;
-    fsAdd('logs',{scout:name,itemId:itemId,itemName:item.name,tentNumber:tentNum,qty:1,notes:notes,status:'out',checkedOut:new Date().toISOString(),returned:''},function(e){
+    var notesEl=document.getElementById('co-notes');
+    var notes=notesEl?notesEl.value.trim():'';
+    fsAdd('logs',{scout:name,itemId:itemId,itemName:item.name,tentNumber:tentNum,qty:1,notes:notes||('Tent #'+tentNum),status:'out',checkedOut:new Date().toISOString(),returned:''},function(e){
       if(e){toast('Save failed.','er');return;}
       toast('Tent #'+tentNum+' checked out to '+name+'!');
       document.getElementById('co-name').value='';
-      document.getElementById('co-tent-num').value='';
+      document.getElementById('co-item').value='';
+      document.getElementById('co-dynamic-fields').innerHTML='';
       loadAll();
     });
-  }else{
-    _origCheckoutItem();
+  } else {
+    var qtyEl=document.getElementById('co-qty');
+    var qty=qtyEl?parseInt(qtyEl.value)||1:1;
+    var notesEl=document.getElementById('co-notes');
+    var notes=notesEl?notesEl.value.trim():'';
+    if(avail(itemId)<qty){toast('Not enough available.','er');return;}
+    fsAdd('logs',{scout:name,itemId:itemId,itemName:item.name,tentNumber:'',qty:qty,notes:notes,status:'out',checkedOut:new Date().toISOString(),returned:''},function(e){
+      if(e){toast('Save failed.','er');return;}
+      toast(qty+'x '+item.name+' checked out to '+name+'!');
+      document.getElementById('co-name').value='';
+      document.getElementById('co-item').value='';
+      document.getElementById('co-dynamic-fields').innerHTML='';
+      loadAll();
+    });
   }
 };
 
 // Show tent number in log
-var _origRenderLog2=renderLog;
-renderLog=function(){
-  var q=(document.getElementById('log-search')||{value:''}).value.toLowerCase();
-  var tb=document.getElementById('log-body');
-  var filtered=q?logs.filter(function(l){return (l.scout||'').toLowerCase().indexOf(q)>-1||(l.itemName||'').toLowerCase().indexOf(q)>-1||(l.tentNumber||'').indexOf(q)>-1;}):logs;
-  if(!filtered.length){tb.innerHTML='<tr><td colspan="7" class="empty">'+(q?'No entries match.':'No entries yet.')+'</td></tr>';return;}
-  tb.innerHTML=filtered.map(function(l){
-    var nameCell=esc(l.itemName)+(l.tentNumber?'<br><span style="color:var(--silver);font-size:0.78rem">Tent #'+esc(l.tentNumber)+'</span>':'');
-    return '<tr><td><strong>'+esc(l.scout)+'</strong></td><td>'+nameCell+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td>'+fmt(l.returned)+'</td><td><span class="'+(l.status==='out'?'sout':'sin')+'">'+(l.status==='out'?'OUT':'RETURNED')+'</span></td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td></tr>';
-  }).join('');
-};
 
-// Also show tent number in active checkouts
-var _origRenderActive2=renderActive;
-renderActive=function(){
-  var tb=document.getElementById('active-body');
-  var active=logs.filter(function(l){return l.status==='out';});
-  if(!active.length){tb.innerHTML='<tr><td colspan="6" class="empty">No active checkouts.</td></tr>';return;}
-  tb.innerHTML='';
-  for(var i=0;i<active.length;i++){
-    var l=active[i];
-    var tr=document.createElement('tr');
-    var nameCell=esc(l.itemName)+(l.tentNumber?'<br><span style="color:var(--silver);font-size:0.78rem">Tent #'+esc(l.tentNumber)+'</span>':'');
-    tr.innerHTML='<td><strong>'+esc(l.scout)+'</strong></td><td>'+nameCell+'</td><td>'+l.qty+'</td><td>'+fmt(l.checkedOut)+'</td><td style="color:var(--silver)">'+(l.notes?esc(l.notes):'-')+'</td>';
-    var td=document.createElement('td');
-    var btn=document.createElement('button');
-    btn.className='btn bp bsm';btn.textContent='Return';
-    (function(lid){btn.onclick=function(){returnById(lid);};})(l.id);
-    td.appendChild(btn);tr.appendChild(td);tb.appendChild(tr);
-  }
-};
 
-// == ONE-TIME SEED DATA FUNCTION ==
-// Run this ONCE from the browser console: seedAllData()
-// It adds all inventory and pre-logged checkouts
-function seedAllData(){
-  if(!adminUnlocked){toast('Unlock admin first.','er');return;}
-  toast('Seeding data... please wait.','inf');
 
-  var inv=[
-    {name:'Water Jug (Blue Gallon)',category:'Water & Hydration',qty:6,location:'New Trailer'},
-    {name:'First Aid Kit',category:'Safety',qty:4,location:'New Trailer'},
-    {name:'First Aid Bag',category:'Safety',qty:1,location:'New Trailer'},
-    {name:'Folding Table',category:'Camp Furniture',qty:6,location:'New Trailer'},
-    {name:'Nitrile Gloves (Box)',category:'Safety',qty:2,location:'New Trailer'},
-    {name:'Rope (Bag)',category:'Gear',qty:2,location:'New Trailer'},
-    {name:'Poles',category:'Gear',qty:1,location:'New Trailer'},
-    {name:'Rolling Cart (Travel)',category:'Transport',qty:3,location:'New Trailer'},
-    {name:'Camp Stove',category:'Cooking',qty:4,location:'New Trailer'},
-    {name:'Patrol Box',category:'Cooking',qty:3,location:'New Trailer'},
-    {name:'Troop Box',category:'Cooking',qty:1,location:'New Trailer'},
-    {name:'Cooler',category:'Cooking',qty:2,location:'New Trailer'},
-    {name:'Charcoal (Bag)',category:'Cooking',qty:2,location:'New Trailer'},
-    {name:'Dutch Oven',category:'Cooking',qty:3,location:'New Trailer'},
-    {name:'Large Water Pot',category:'Cooking',qty:1,location:'New Trailer'},
-    {name:'Tarp',category:'Shelter',qty:7,location:'New Trailer'},
-    {name:'Charcoal Setup',category:'Cooking',qty:2,location:'New Trailer'},
-    {name:'Misc Tools',category:'Gear',qty:1,location:'New Trailer'},
-    {name:'Misc Items',category:'Gear',qty:1,location:'New Trailer'},
-    {name:'Expandable Poles',category:'Gear',qty:1,location:'New Trailer'},
-    {name:'10-Person Tent',category:'Shelter',qty:1,location:'New Trailer'},
-    {name:'Cooking Supplies',category:'Cooking',qty:1,location:'New Trailer'},
-    {name:'2-Person Tent',category:'Shelter',qty:8,location:'New Trailer',hasTentNumbers:'true',tentNumbers:'201,202,203,204,205,206,207,208'},
-    {name:'3-Person Tent',category:'Shelter',qty:6,location:'New Trailer',hasTentNumbers:'true',tentNumbers:'301,302,303,304,306'},
-    {name:'4-Person Tent',category:'Shelter',qty:6,location:'New Trailer',hasTentNumbers:'true',tentNumbers:'401,402,403,404,405,406'},
-    {name:'Big Cooking Stove',category:'Cooking',qty:1,location:'Old Troop Trailer'},
-    {name:'Circular Saw',category:'Tools',qty:1,location:'Old Troop Trailer'},
-    {name:'Small Grill',category:'Cooking',qty:2,location:'Old Troop Trailer'},
-    {name:'Tent (Broken/Repair)',category:'Shelter',qty:4,location:'Old Troop Trailer'},
-    {name:'American Flag',category:'Flags & Ceremony',qty:1,location:'Downstairs'},
-    {name:'Troop Flag',category:'Flags & Ceremony',qty:1,location:'Downstairs'},
-    {name:'Flag Pole / Extension',category:'Flags & Ceremony',qty:13,location:'Downstairs'},
-    {name:'Flag Base',category:'Flags & Ceremony',qty:3,location:'Downstairs'},
-    {name:'Court of Honor Log',category:'Admin',qty:1,location:'Downstairs'},
-    {name:'Disposable Cups',category:'Cooking',qty:1,location:'Downstairs'},
-    {name:'Cooking Tins',category:'Cooking',qty:1,location:'Downstairs'},
-    {name:'Small Whiteboard',category:'Admin',qty:2,location:'Downstairs'},
-    {name:'Gift Paper',category:'Misc',qty:1,location:'Downstairs'},
-    {name:'Cardboard Sheets',category:'Misc',qty:1,location:'Downstairs'},
-  ];
 
-  var cons=[
-    {name:'Propane Can (Disposable)',unit:'cans',stock:0,minStock:6,notes:'Restock before each campout',location:'New Trailer'},
-    {name:'Propane Tank (Large)',unit:'tanks',stock:1,minStock:1,notes:'Check level before each trip',location:'New Trailer'},
-    {name:'Fire Extinguisher',unit:'units',stock:1,minStock:1,notes:'Replace immediately after any use',location:'New Trailer'},
-  ];
 
-  var existingNames=items.map(function(i){return i.name;});
-  var toAdd=inv.filter(function(i){return existingNames.indexOf(i.name)===-1;});
-  var total=toAdd.length+cons.length;
-  var done=0;
-  var itemIds={};
-
-  // Store existing item IDs
-  items.forEach(function(i){itemIds[i.name]=i.id;});
-
-  function maybeLogTents(){
-    // Re-fetch items to get new IDs
-    fsGet('items',function(e,d){
-      if(e){toast('Error fetching items for tent logs.','er');return;}
-      d.forEach(function(i){itemIds[i.name]=i.id;});
-      var checkouts=[
-        {scout:'William',itemName:'2-Person Tent',tentNumber:'201'},
-        {scout:'Josh',itemName:'2-Person Tent',tentNumber:'202'},
-        {scout:'Rodriguez Valladares',itemName:'2-Person Tent',tentNumber:'203'},
-        {scout:'Lucas',itemName:'2-Person Tent',tentNumber:'204'},
-        {scout:'Rodriguez Valladares',itemName:'2-Person Tent',tentNumber:'205'},
-        {scout:'Arsh',itemName:'2-Person Tent',tentNumber:'206'},
-        {scout:'Harry',itemName:'2-Person Tent',tentNumber:'208'},
-        {scout:'Robbie',itemName:'3-Person Tent',tentNumber:'301'},
-        {scout:'Unknown',itemName:'3-Person Tent',tentNumber:'305'},
-        {scout:'Luke',itemName:'3-Person Tent',tentNumber:'306'},
-        {scout:'Jonah',itemName:'4-Person Tent',tentNumber:'401'},
-        {scout:'Matthew',itemName:'4-Person Tent',tentNumber:'402'},
-        {scout:'Arsha',itemName:'4-Person Tent',tentNumber:'406'},
-      ];
-      var now=new Date().toISOString();
-      var logDone=0;
-      checkouts.forEach(function(co){
-        var alreadyOut=logs.some(function(l){return l.tentNumber===co.tentNumber&&l.status==='out';});
-        if(alreadyOut){logDone++;if(logDone===checkouts.length){toast('Seed complete!');loadAll();}return;}
-        fsAdd('logs',{scout:co.scout,itemId:itemIds[co.itemName]||'',itemName:co.itemName,tentNumber:co.tentNumber,qty:1,notes:'Tent #'+co.tentNumber,status:'out',checkedOut:now,returned:''},function(){
-          logDone++;if(logDone===checkouts.length){toast('Seed complete! All data loaded.');loadAll();}
-        });
-      });
-    });
-  }
-
-  if(toAdd.length===0&&cons.length===0){maybeLogTents();return;}
-
-  toAdd.forEach(function(item){
-    fsAdd('items',item,function(e,d){
-      if(!e&&d)itemIds[item.name]=d.id;
-      done++;if(done===total)maybeLogTents();
-    });
-  });
-
-  var existingConNames=consumables.map(function(c){return c.name;});
-  cons.forEach(function(c){
-    if(existingConNames.indexOf(c.name)>-1){done++;if(done===total)maybeLogTents();return;}
-    fsAdd('consumables',c,function(){done++;if(done===total)maybeLogTents();});
-  });
-}
+setTimeout(initQR,500);
 
 (function(){var a=document.getElementById('em'),e='wjschaible'+'@'+'gmail.com';if(a){a.href='mailto:'+e;a.textContent=e;}})();
 </script>
