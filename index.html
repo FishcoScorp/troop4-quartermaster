@@ -97,7 +97,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
 <div class="page">
 <header>
   <div class="header-top">
-    <span class="ver">v2.9.0</span>
+    <span class="ver">v3.0.0</span>
     <img class="logo-img" src="logo.png" alt="Scout logo">
     <h1>Troop 4 Quartermaster</h1>
     <div class="troop-sub">Troop 4 &nbsp;·&nbsp; Scarsdale <span class="sdot" id="sdot"></span></div>
@@ -877,7 +877,20 @@ function saveAnnouncement(){
   var msg=document.getElementById('announce-input').value.trim();
   var days=parseInt(document.getElementById('announce-expiry').value)||0;
   if(!msg){toast('Enter a message first.','er');return;}
-
+  var expires='';
+  if(days>0){var d=new Date();d.setDate(d.getDate()+days);expires=d.toISOString();}
+  var data={message:msg,expires:expires,posted:new Date().toISOString()};
+  fsPatch('settings','announcement',data,function(e){
+    if(e){
+      fsAdd('settings',Object.assign({id:'announcement'},data),function(e2){
+        if(e2){toast('Error.','er');return;}
+        toast('Announcement posted!');loadAnnouncement();
+      });
+      return;
+    }
+    toast('Announcement posted!');loadAnnouncement();
+  });
+}
 
 function clearAnnouncement(){
   fsPatch('settings','announcement',{message:'',expires:''},function(e){
