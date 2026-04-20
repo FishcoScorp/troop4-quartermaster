@@ -97,7 +97,7 @@ footer{text-align:center;padding:16px;font-size:0.75rem;color:rgba(160,180,204,0
 <div class="page">
 <header>
   <div class="header-top">
-    <span class="ver">v2.7.0</span>
+    <span class="ver">v2.9.0</span>
     <img class="logo-img" src="logo.png" alt="Scout logo">
     <h1>Troop 4 Quartermaster</h1>
     <div class="troop-sub">Troop 4 &nbsp;·&nbsp; Scarsdale <span class="sdot" id="sdot"></span></div>
@@ -634,7 +634,7 @@ function openConfirm(t,m,fn){
 function closeModal(){document.getElementById('mov').classList.add('hidden');}
 
 
-// ── REPORTS ──
+// -- REPORTS --
 var reports = [];
 function loadReports(cb){
   fsGet('reports',function(e,d){
@@ -709,7 +709,7 @@ function clearAllReports(){
 }
 
 
-// ══ CONSUMABLES ══
+// == CONSUMABLES ==
 var consumables=[], restocks=[];
 
 function loadConsumables(cb){
@@ -839,7 +839,7 @@ function renderAdminRestocks(){
   });
 }
 
-// ══ FIXED ANNOUNCEMENT with expiry ══
+// == FIXED ANNOUNCEMENT with expiry ==
 function loadAnnouncement(){
   fsGet('settings',function(e,d){
     if(e)return;
@@ -873,21 +873,11 @@ function loadAnnouncement(){
   });
 }
 
-  var expires='';
-  if(days>0){var d=new Date();d.setDate(d.getDate()+days);expires=d.toISOString();}
-  var data={message:msg,expires:expires,posted:new Date().toISOString()};
-  // Try patch first, fall back to add
-  fsPatch('settings','announcement',data,function(e){
-    if(e){
-      fsAdd('settings',Object.assign({id:'announcement'},data),function(e2){
-        if(e2){toast('Error.','er');return;}
-        toast('Announcement posted!');loadAnnouncement();
-      });
-      return;
-    }
-    toast('Announcement posted!');loadAnnouncement();
-  });
-}
+function saveAnnouncement(){
+  var msg=document.getElementById('announce-input').value.trim();
+  var days=parseInt(document.getElementById('announce-expiry').value)||0;
+  if(!msg){toast('Enter a message first.','er');return;}
+
 
 function clearAnnouncement(){
   fsPatch('settings','announcement',{message:'',expires:''},function(e){
@@ -896,7 +886,7 @@ function clearAnnouncement(){
   });
 }
 
-// ── QR CODE ──
+// -- QR CODE --
 function initQR(){
   var el=document.getElementById('qr-container');
   if(!el||el.hasChildNodes())return;
@@ -910,7 +900,7 @@ function initQR(){
   }catch(ex){el.innerHTML='<p style="color:var(--silver);font-size:0.8rem">QR library loading...</p>';}
 }
 
-// ── SEARCH (filter existing render functions) ──
+// -- SEARCH (filter existing render functions) --
 var _origRenderInv = renderInv;
 renderInv = function(){
   var q=(document.getElementById('inv-search')||{value:''}).value.toLowerCase();
@@ -936,7 +926,7 @@ renderLog = function(){
   }).join('');
 };
 
-// ── PATCH showSection to handle report tab ──
+// -- PATCH showSection to handle report tab --
 var _origShowSection = showSection;
 showSection = function(id){
   _origShowSection(id);
@@ -945,7 +935,7 @@ showSection = function(id){
   if(id==='inventory'){setTimeout(initQR,300);}
 };
 
-// ── PATCH switchTab to handle new admin tabs ──
+// -- PATCH switchTab to handle new admin tabs --
 var _origSwitchTab = switchTab;
 switchTab = function(t){
   document.querySelectorAll('.atab').forEach(function(x){x.classList.remove('active');});
@@ -958,7 +948,7 @@ switchTab = function(t){
   if(t==='consumables'){renderAdminCons();renderAdminRestocks();}
 };
 
-// ── PATCH loadAll to also load reports and announcement ──
+// -- PATCH loadAll to also load reports and announcement --
 var _origLoadAll = loadAll;
 loadAll = function(){
   _origLoadAll();
@@ -971,7 +961,7 @@ loadAll = function(){
 setTimeout(initQR, 500);
 
 
-// ══ TENT NUMBER TRACKING ══
+// == TENT NUMBER TRACKING ==
 function onItemChange(){
   var itemId=document.getElementById('co-item').value;
   var item=items.find(function(i){return i.id===itemId;});
@@ -1058,7 +1048,7 @@ renderActive=function(){
   }
 };
 
-// ══ ONE-TIME SEED DATA FUNCTION ══
+// == ONE-TIME SEED DATA FUNCTION ==
 // Run this ONCE from the browser console: seedAllData()
 // It adds all inventory and pre-logged checkouts
 function seedAllData(){
